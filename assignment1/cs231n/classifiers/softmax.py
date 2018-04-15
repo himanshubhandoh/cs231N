@@ -29,7 +29,28 @@ def softmax_loss_naive(W, X, y, reg):
   # here, it is easy to run into numeric instability. Don't forget the        #
   # regularization!                                                           #
   #############################################################################
-  pass
+  num_train = X.shape[0]
+  num_classes = W.shape[1]
+  for i in range(num_train):
+    scores = X[i].dot(W)
+    max_score = np.max(scores)
+    reduced_scores = scores - max_score
+    sum_of_exp = np.sum(np.exp(reduced_scores))
+    correct_class_score = reduced_scores[y[i]]
+    for j in range(num_classes):
+      if j == y[i]:
+        loss = loss - reduced_scores[j]
+        dW[:,j] = dW[:,j] - X[i]
+      dW[:,j]+=(np.exp(reduced_scores[j])/sum_of_exp) * X[i]
+    loss += np.log(sum_of_exp)
+    
+  loss /= num_train
+  dW /= (1.0*num_train)
+  
+
+  loss += reg * np.sum(W * W)  
+  dW += 2*reg*W
+    
   #############################################################################
   #                          END OF YOUR CODE                                 #
   #############################################################################
@@ -53,7 +74,24 @@ def softmax_loss_vectorized(W, X, y, reg):
   # here, it is easy to run into numeric instability. Don't forget the        #
   # regularization!                                                           #
   #############################################################################
-  pass
+  scores = X.dot(W)
+  num_train = X.shape[0]
+  C = W.shape[1]
+  
+  max_per_example = np.max(scores, axis = 1)
+  reduced_scores = scores - max_per_example[np.newaxis].T
+  all_exponents = np.exp(reduced_scores)
+  one_hot_targets = np.eye(C)[y]
+  loss-= np.sum(reduced_scores * one_hot_targets) #adds the correct class scores
+  all_exponents_row_sum = np.sum(all_exponents, axis = 1)
+  loss+=np.sum(np.log(all_exponents_row_sum))
+  loss/= num_train
+  loss+=reg*np.sum(W*W)
+
+  class_multipliers = all_exponents/all_exponents_row_sum[np.newaxis].T
+  class_multipliers-=one_hot_targets
+  dW = X.T.dot(class_multipliers)*1.0/num_train + 2*reg*W
+  
   #############################################################################
   #                          END OF YOUR CODE                                 #
   #############################################################################
