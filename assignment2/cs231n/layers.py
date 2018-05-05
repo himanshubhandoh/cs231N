@@ -306,10 +306,12 @@ def batchnorm_backward_alt(dout, cache):
     gamma = cache['gamma']
     dgamma = np.sum(x_cap * dout, axis = 0)
     dbeta = np.sum(dout, axis = 0)
-    dx_cap = gamma*dout
-    dz_sq = -1/(2*m)*np.sum(dx_cap*z*((den)**3), axis = 0)
-    dz = 2*z*dz_sq + den*dx_cap
-    dx = dz - np.sum(dz, axis = 0)*1/m
+#     dx_cap = gamma*dout
+#     dz_sq = -1/(2*m)*np.sum(dx_cap*z*((den)**3), axis = 0)
+#     dz = 2*z*dz_sq + den*dx_cap
+#     dx = dz - np.sum(dz, axis = 0)*1/m
+    
+    dx = (1 / m) * gamma * den * ((m * dout) - np.sum(dout, axis=0) - ((z) * np.square(den) * np.sum(dout*z, axis=0)))
     ###########################################################################
     #                             END OF YOUR CODE                            #
     ###########################################################################
@@ -541,19 +543,7 @@ def conv_forward_naive(x, w, b, conv_param):
     F, _, HH, WW = w.shape
     H_prime = int(1 + (H + 2*pad - HH)/stride)
     W_prime = int(1 + (W + 2*pad - WW)/stride)
-    y = np.zeros((N, F, H_prime, W_prime))
-#     print("N", N)
-#     print("C", C)
-#     print("H_pad", H_pad)
-#     print("W_pad", W_pad)
-#     print("H", H)
-#     print("W", W)
-#     print("HH", HH)
-#     print("WW", WW)
-#     print("F", F)
-#     print("H_prime", H_prime)
-#     print("W_prime", W_prime)
-    
+    y = np.zeros((N, F, H_prime, W_prime))    
     for n in range(N):
         for h_prime in range(0, H_prime):
             h_orig = h_prime * stride
@@ -563,7 +553,6 @@ def conv_forward_naive(x, w, b, conv_param):
                 y[n, :, h_prime, w_prime] = np.sum(product, axis = (1,2,3)) + b
         
     out = y
-#     print(out)
     ###########################################################################
     #                             END OF YOUR CODE                            #
     ###########################################################################
@@ -611,8 +600,6 @@ def conv_backward_naive(dout, cache):
                 dx_pad[n, :, h_orig:h_orig+HH, w_orig:w_orig + WW] += np.sum(current_dout*w, axis=0)
                 dw+= x_pad[n, :, h_orig:h_orig+HH, w_orig:w_orig + WW] * current_dout
                 db+= dout[n, :, h_prime, w_prime]
-#                 product = x_pad[n, :, h_orig:h_orig+HH, w_orig:w_orig + WW] * w # F X C X HH X WW
-#                 y[n, :, h_prime, w_prime] = np.sum(product, axis = (1,2,3)) + b
     
     if pad !=0:
         dx = dx_pad[:,:,pad:-pad, pad:-pad]
@@ -736,7 +723,10 @@ def spatial_batchnorm_forward(x, gamma, beta, bn_param):
     # vanilla version of batch normalization you implemented above.           #
     # Your implementation should be very short; ours is less than five lines. #
     ###########################################################################
-    pass
+    N, C, H, W = x.shape
+    x_mod = x.transpose(0,2,3,1).reshape(N*H*W, C)
+    out_mod, cache = batchnorm_forward(x_mod, gamma, beta, bn_param)
+    out = out_mod.reshape(N,H,W,C).transpose(0,3,1,2)
     ###########################################################################
     #                             END OF YOUR CODE                            #
     ###########################################################################
@@ -766,7 +756,9 @@ def spatial_batchnorm_backward(dout, cache):
     # vanilla version of batch normalization you implemented above.           #
     # Your implementation should be very short; ours is less than five lines. #
     ###########################################################################
-    pass
+    N, C, H, W = dout.shape
+    dx_prime, dgamma, dbeta = batchnorm_backward_alt(dout.transpose(0,2,3,1).reshape(N*H*W,C), cache)
+    dx = dx_prime.reshape(N,H,W,C).transpose(0,3,1,2)
     ###########################################################################
     #                             END OF YOUR CODE                            #
     ###########################################################################
@@ -793,7 +785,7 @@ def spatial_groupnorm_forward(x, gamma, beta, G, gn_param):
     - out: Output data, of shape (N, C, H, W)
     - cache: Values needed for the backward pass
     """
-    out, cache = None, None
+    out, cache = None, {}
     eps = gn_param.get('eps',1e-5)
     ###########################################################################
     # TODO: Implement the forward pass for spatial group normalization.       #
@@ -802,7 +794,27 @@ def spatial_groupnorm_forward(x, gamma, beta, G, gn_param):
     # the bulk of the code is similar to both train-time batch normalization  #
     # and layer normalization!                                                # 
     ###########################################################################
-    pass
+    N, C, H, W = x.shape
+    
+    C_prime = int(C/G)
+    
+    x_mod = x.reshape(N, G, C_prime, H, W)
+    sample_mean = np.mean(x_mod, axis = (2,3,4), keepdims = True)
+    sample_var = np.var(x_mod, axis = (2,3,4), keepdims = True)
+    z = x_mod - sample_mean
+    sig_root = np.sqrt(sample_var + eps)
+    den = 1.0/sig_root
+    
+    x_cap_mod = z*den #(N, G, C_prime, H, W)
+    x_cap = x_cap_mod.reshape(N,C,H,W)
+    
+    out = gamma*x_cap + beta
+    
+    cache['x_cap'] = x_cap
+    cache['gamma'] = gamma
+    cache['den'] = den
+    cache['z'] = z
+    cache['G']= G
     ###########################################################################
     #                             END OF YOUR CODE                            #
     ###########################################################################
@@ -828,7 +840,55 @@ def spatial_groupnorm_backward(dout, cache):
     # TODO: Implement the backward pass for spatial group normalization.      #
     # This will be extremely similar to the layer norm implementation.        #
     ###########################################################################
-    pass
+    N,C,H,W = dout.shape
+
+    G = cache['G']
+    den = cache['den']
+    x_cap = cache['x_cap']
+    m = dout.shape[1]
+    z = cache['z']
+    gamma = cache['gamma']
+    dgamma = np.sum(x_cap * dout, axis = (0,2,3), keepdims = True)
+    dbeta = np.sum(dout, axis = (0,2,3), keepdims = True)
+    C_prime = int(C/G)
+    dx_cap = gamma*dout
+    m = C_prime * H * W
+    
+    
+    
+    
+    dx_trans_cap = dx_cap.reshape(N,G,C_prime, H, W)
+    dz_sq = -1/(2*m)*np.sum(dx_trans_cap*z*((den)**3), axis = (2,3,4), keepdims = True)
+    dz = 2*z*dz_sq + den*dx_trans_cap
+    dx_trans = dz - np.sum(dz, axis = (2,3,4), keepdims = True)*1/m
+    dx = dx_trans.reshape(N, C, H, W)
+    
+    
+    
+    
+    
+#     N,C,H,W = dout.shape
+#     G = cache['G']
+#     den = cache['den']
+#     x_cap = cache['x_cap'] #(N*H*W, C)
+#     dout_mod = dout.transpose(0,2,3,1).reshape(N*H*W, C)
+    
+#     z = cache['z']
+#     gamma = cache['gamma']
+#     dgamma = np.sum(x_cap * dout_mod, axis = 0)
+#     dbeta = np.sum(dout_mod, axis = 0)
+#     dx_cap = gamma*dout_mod
+#     C_prime = int(C/G)
+#     dx_mod_cap = dx_cap.reshape(N*H*W, C_prime, G).reshape(N*H*W*C_prime, G)
+#     dx_trans_cap = dx_mod_cap.T
+#     m = G
+#     dz_sq = -1/(2*m)*np.sum(dx_trans_cap*z*((den)**3), axis = 0)
+#     dz = 2*z*dz_sq + den*dx_trans_cap
+#     dx_trans = dz - np.sum(dz, axis = 0)*1/m
+#     dx_mod = dx_trans.T
+#     dx = dx_mod.reshape(N*H*W, C).reshape(N,H,W,C).transpose(0,3,1,2)
+#     dgamma = dgamma.reshape((1,C,1,1))
+#     dbeta = dbeta.reshape((1,C,1,1))
     ###########################################################################
     #                             END OF YOUR CODE                            #
     ###########################################################################
